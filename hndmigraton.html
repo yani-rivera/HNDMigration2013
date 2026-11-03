@@ -1,0 +1,558 @@
+
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8"/>
+        <title>kepler.gl embedded map</title>
+
+        <!--Uber Font-->
+        <link rel="stylesheet" href="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/uber-fonts/4.0.0/superfine.css">
+
+        <!--Kepler css-->
+        <link href="https://unpkg.com/kepler.gl@3.3.0-alpha.19/umd/keplergl.min.css" rel="stylesheet">
+
+        <!--MapBox css-->
+        <link href="https://api.tiles.mapbox.com/mapbox-gl-js/v1.1.1/mapbox-gl.css" rel="stylesheet">
+        <link href="https://unpkg.com/maplibre-gl@^3/dist/maplibre-gl.css" rel="stylesheet">
+
+        <!-— facebook open graph tags -->
+        <meta property="og:url" content="http://kepler.gl/" />
+        <meta property="og:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool" />
+        <meta property="og:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets." />
+        <meta property="og:site_name" content="kepler.gl" />
+        <meta property="og:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="800" />
+        <meta property="og:image:height" content="800" />
+
+        <!-— twitter card tags -->
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:site" content="@openjsf">
+        <meta name="twitter:creator" content="@openjsf">
+        <meta name="twitter:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool">
+        <meta name="twitter:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets.">
+        <meta name="twitter:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+
+        <!--
+          Load React/Redux and the other UMD peer dependencies as ES modules.
+          React >= 19 no longer ships UMD builds, so we pull everything from an
+          ESM CDN (esm.sh) and re-expose them on window as the globals that the
+          kepler.gl UMD bundle (and the inline scripts below) expect.
+
+          IMPORTANT: this file must keep working as a standalone file, i.e. opened
+          directly from disk via the file:// protocol. Native ES module scripts
+          are always fetched with CORS semantics and a file:// document has an
+          opaque (null) origin, so the browser refuses to load native modules or
+          import maps locally. To keep the standalone-file behaviour we run
+          es-module-shims in "shim mode" (importmap-shim / module-shim tags): it
+          is a classic script (loads fine from file://) that resolves the import
+          map and executes the modules as blob: URLs, sidestepping that
+          restriction. The import map pins a single React instance and uses
+          external= so react-redux / styled-components reuse it (otherwise React
+          hooks break).
+        -->
+        <script>
+          // Trigger es-module-shims "shim mode" so it always parses the
+          // importmap-shim / module-shim tags below instead of deferring to the
+          // native loader (which fails under file://).
+          window.esmsInitOptions = {shimMode: true};
+        </script>
+        <script>
+          // Replace the loading overlay with an error message.
+          // Safe to call at any time — once React has mounted and removed
+          // #kepler-load-screen this becomes a no-op.
+          window._keplerShowLoadError = function(msg) {
+            var loadScreen = document.getElementById('kepler-load-screen');
+            if (!loadScreen) return;
+            var spinner = loadScreen.querySelector('.kepler-spinner');
+            var label = loadScreen.querySelector('.kepler-load-label');
+            if (spinner) spinner.style.display = 'none';
+            if (label) label.style.display = 'none';
+            var errEl = document.createElement('div');
+            errEl.className = 'kepler-load-error';
+            errEl.textContent = msg || 'Failed to load the map. Check your internet connection and reload the page.';
+            loadScreen.appendChild(errEl);
+          };
+          // Catch unhandled promise rejections (e.g. ES module imports failing
+          // inside the module-shim script before loadScript is ever called).
+          window.addEventListener('unhandledrejection', function(event) {
+            console.error('kepler.gl: unhandled rejection during map load', event.reason);
+            window._keplerShowLoadError('Failed to load the map. Check your internet connection and reload the page.');
+          });
+        </script>
+        <script src="https://unpkg.com/es-module-shims@2.8.1/dist/es-module-shims.js" crossorigin="anonymous"></script>
+        
+        <script type="importmap-shim">
+          {
+            "imports": {
+              "react": "https://esm.sh/react@19.1.0",
+              "react/jsx-runtime": "https://esm.sh/react@19.1.0/jsx-runtime",
+              "react-dom": "https://esm.sh/react-dom@19.1.0?external=react",
+              "react-dom/client": "https://esm.sh/react-dom@19.1.0/client?external=react",
+              "redux": "https://esm.sh/redux@5.0.1",
+              "react-redux": "https://esm.sh/react-redux@9.3.0?external=react,react-dom,redux",
+              "styled-components": "https://esm.sh/styled-components@6.1.19?external=react,react-dom"
+            }
+          }
+        </script>
+
+        <!--
+          Expose the ES modules as globals for the UMD kepler.gl bundle, then load
+          the kepler.gl UMD script and the app bootstrap script only after those
+          globals are available. The kepler.gl UMD bundle is a classic script
+          (which loads fine from file://), so it is injected dynamically here once
+          the globals are in place to guarantee the correct ordering.
+        -->
+        <script type="module-shim">
+          import * as React from 'react';
+          import * as ReactDOM from 'react-dom';
+          import * as ReactDOMClient from 'react-dom/client';
+          import * as Redux from 'redux';
+          import * as ReactRedux from 'react-redux';
+          import * as StyledComponents from 'styled-components';
+
+          // esm.sh namespaces expose the module's default export under .default.
+          // Normalize so the globals match the shape the React 18 UMD builds had:
+          // - React / Redux / ReactRedux keep their full namespace (named exports).
+          // - ReactDOM merges the classic + client entry so both createPortal and
+          //   createRoot are available (createRoot moved to react-dom/client in v19).
+          // - styled-components' global must be the callable default (styled) with
+          //   its named exports (ThemeProvider, withTheme, css, keyframes, ...)
+          //   attached, since the kepler.gl bundle relies on both.
+          window.React = React.default || React;
+          window.ReactDOM = Object.assign({}, ReactDOM.default || ReactDOM, ReactDOMClient);
+          window.Redux = Redux.default || Redux;
+          window.ReactRedux = ReactRedux.default || ReactRedux;
+          window.styled = Object.assign(StyledComponents.default, StyledComponents);
+
+          function loadScript(src) {
+            return new Promise(function(resolve, reject) {
+              var script = document.createElement('script');
+              script.src = src;
+              script.crossOrigin = 'anonymous';
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+          }
+
+          // Load the kepler.gl UMD bundle after the globals are in place, then run
+          // the app bootstrap scripts (marked as type="text/kepler-bootstrap").
+          loadScript("https://unpkg.com/kepler.gl@3.3.0-alpha.19/umd/keplergl.min.js")
+            .then(function() {
+              var bootstraps = document.querySelectorAll('script[type="text/kepler-bootstrap"]');
+              bootstraps.forEach(function(node) {
+                var script = document.createElement('script');
+                script.text = node.textContent;
+                document.body.appendChild(script);
+              });
+            })
+            .catch(function(error) {
+              console.error('kepler.gl: failed to load UMD bundle', error);
+              window._keplerShowLoadError('Failed to load the map bundle. Check your internet connection and reload the page.');
+            });
+        </script>
+        <style type="text/css">
+          body {margin: 0; padding: 0; overflow: hidden;}
+          #kepler-load-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #29323c;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 9999;
+            font-family: ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif;
+            color: #a0a7b4;
+          }
+          #kepler-load-screen .kepler-spinner {
+            width: 48px; height: 48px;
+            border: 4px solid rgba(255,255,255,0.08);
+            border-top-color: #1fbad6;
+            border-radius: 50%;
+            animation: kepler-spin 0.8s linear infinite;
+          }
+          #kepler-load-screen .kepler-load-label {
+            font-size: 13px;
+            letter-spacing: 0.5px;
+          }
+          #kepler-load-screen .kepler-load-error {
+            font-size: 13px;
+            color: #f05e45;
+            max-width: 360px;
+            text-align: center;
+            line-height: 1.5;
+          }
+          @keyframes kepler-spin { to { transform: rotate(360deg); } }
+        </style>
+
+        <!--MapBox token-->
+        <!--
+          SECURITY NOTE: Your Mapbox access token is embedded below in plain text.
+          Anyone with access to this HTML file can see and use this token.
+          Consider using a scoped token with URL restrictions to limit misuse.
+          See: https://docs.mapbox.com/accounts/guides/tokens/#url-restrictions
+        -->
+        <script>
+          /**
+           * Provide your MapBox Token
+           **/
+          window.MAPBOX_TOKEN = "pk.eyJ1IjoieXJpdmVyYTIwMjYiLCJhIjoiY213MHl3aXd3MDRubzMwb20yZTZuazIzYiJ9.Z7J8575bibB4qKhDxJbmAA";
+          window.WARNING_MESSAGE = 'No Mapbox token provided. Mapbox basemaps will not be available. To enable them, edit this file and set MAPBOX_TOKEN to your Mapbox access key.';
+        </script>
+      </head>
+      <body>
+        <!-- We will put our React component inside this div. -->
+        <div id="app">
+          <div id="kepler-load-screen">
+            <div class="kepler-spinner"></div>
+            <div class="kepler-load-label">Loading map…</div>
+          </div>
+        </div>
+
+        <!--
+          Load our React component. This script is not executed inline: it is run
+          by the module shim in <head> once the kepler.gl UMD bundle (and its
+          global peer dependencies) have finished loading.
+        -->
+        <script type="text/kepler-bootstrap">
+          /* Validate Mapbox Token */
+          if ((MAPBOX_TOKEN || '') === '' || MAPBOX_TOKEN === 'PROVIDE_MAPBOX_TOKEN') {
+            console.warn('[kepler.gl]', WARNING_MESSAGE);
+          }
+
+          const branding = {"appName":"kepler.gl","appWebsite":"http://kepler.gl/","appIcon":null,"appNameColor":"#1FBAD6"};
+
+          /** STORE **/
+          // Pre-seed styleType so the correct basemap fetch starts on the very
+          // first render, avoiding a flash of the default dark basemap.
+          // options.config has the versioned envelope shape: { version, config: { mapStyle, ... } }
+          const savedStyleType = "dark-matter";
+
+          const reducers = (function createReducers(redux, keplerGl, styleType) {
+            return redux.combineReducers({
+              // mount keplerGl reducer
+              keplerGl: keplerGl.keplerGlReducer.initialState({
+                uiState: {
+                  readOnly: true,
+                  currentModal: null,
+                  exportMap: Object.assign({}, keplerGl.INITIAL_UI_STATE.exportMap, branding)
+                },
+                ...(styleType ? {mapStyle: {styleType}} : {})
+              })
+            });
+          }(Redux, KeplerGl, savedStyleType));
+
+          const middleWares = (function createMiddlewares(keplerGl) {
+            return keplerGl.enhanceReduxMiddleware([
+              // Add other middlewares here
+            ]);
+          }(KeplerGl));
+
+          const enhancers = (function craeteEnhancers(redux, middles) {
+            return redux.applyMiddleware(...middles);
+          }(Redux, middleWares));
+
+          const store = (function createStore(redux, enhancers) {
+            return redux.createStore(
+              reducers,
+              {},
+              redux.compose(enhancers)
+            );
+          }(Redux, enhancers));
+          /** END STORE **/
+
+          /** COMPONENTS **/
+          var BrandLogo = (function createBrandLogo(react, branding) {
+            return function BrandLogo(props) {
+              var fixed = Boolean(props && props.fixed);
+              var icon = branding.appIcon
+                ? react.createElement("img", {
+                    src: branding.appIcon,
+                    alt: "",
+                    "aria-hidden": true,
+                    style: {width: "22px", height: "15px", objectFit: "contain"}
+                  })
+                : react.createElement(
+                    "svg",
+                    {width: "22px", height: "15px", viewBox: "0 0 22 15", "aria-hidden": true},
+                    react.createElement(
+                      "g",
+                      {transform: "translate(11, -3) rotate(45.000000)"},
+                      react.createElement("rect", {fill: "#535C6C", x: "0", y: "5", width: "10", height: "10"}),
+                      react.createElement("rect", {fill: "#1FBAD6", x: "5", y: "0", width: "10", height: "10"})
+                    )
+                  );
+
+              return react.createElement(
+                "div",
+                {
+                  className: fixed ? "logo-container" : "side-panel-logo",
+                  style: fixed
+                    ? {position: "fixed", zIndex: 10000, padding: "4px", display: "flex", alignItems: "center"}
+                    : {display: "flex", alignItems: "flex-start"}
+                },
+                react.createElement(
+                  "div",
+                  {style: {marginTop: fixed ? 0 : "3px"}},
+                  icon
+                ),
+                react.createElement(
+                  "div",
+                  {className: "logo__title", style: {marginLeft: "6px"}},
+                  react.createElement(
+                    "a",
+                    {
+                      className: "kepler_gl__logo logo__link",
+                      href: branding.appWebsite,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                      style: {
+                        color: branding.appNameColor,
+                        fontFamily: "ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif",
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        letterSpacing: "1.17px",
+                        textDecoration: "none"
+                      }
+                    },
+                    react.createElement("span", {style: {color: branding.appNameColor}}, branding.appName)
+                  ),
+                  !fixed && props && props.version
+                    ? react.createElement(
+                        "div",
+                        {
+                          className: "logo__version",
+                          style: {fontSize: "10px", color: "#a0a7b4", letterSpacing: "0.83px", lineHeight: "14px"}
+                        },
+                        props.version
+                      )
+                    : null
+                )
+              );
+            };
+          }(React, branding));
+
+          /** Custom map control factory to restore export editing and chart display. **/
+          var CustomMapControlFactory = (function createCustomMapControl(react, keplerGl) {
+            var EffectControlFactory = keplerGl.EffectControlFactory;
+            var EffectManagerFactory = keplerGl.EffectManagerFactory;
+            var AnnotationControlFactory = keplerGl.AnnotationControlFactory;
+            var AnnotationManagerFactory = keplerGl.AnnotationManagerFactory;
+            var ChartControlFactory = keplerGl.ChartControlFactory;
+            var ChartManagerFactory = keplerGl.ChartManagerFactory;
+            var MapControlFactory = keplerGl.MapControlFactory;
+
+            if (
+              !EffectControlFactory ||
+              !EffectManagerFactory ||
+              !AnnotationControlFactory ||
+              !AnnotationManagerFactory ||
+              !ChartControlFactory ||
+              !ChartManagerFactory ||
+              !MapControlFactory
+            ) {
+              console.warn('kepler.gl: Export control factories not available, skipping control injection');
+              return null;
+            }
+
+            function ExportMapControlFactory(
+              EffectControl,
+              EffectManager,
+              AnnotationControl,
+              AnnotationManager,
+              ChartControl,
+              ChartManager
+            ) {
+              var args = Array.prototype.slice.call(arguments, 6);
+              var MapControl = MapControlFactory.apply(null, args);
+              var defaultActionComponents = MapControl.defaultActionComponents || [];
+
+              var ExportMapControl = function ExportMapControl(props) {
+                var readOnly = Boolean(props.readOnly);
+                var mapControls = props.mapControls || {};
+                var charts = props.charts || [];
+                var actionComponents = defaultActionComponents.filter(function(ActionComponent) {
+                  return !readOnly || ActionComponent !== AnnotationControl;
+                });
+                if (!readOnly) {
+                  actionComponents = actionComponents.concat([ChartControl, EffectControl]);
+                }
+                var showEffects = !readOnly && Boolean(mapControls.effect && mapControls.effect.active);
+                var showAnnotations = !readOnly && Boolean(mapControls.annotation && mapControls.annotation.active);
+                var showChartPanel = !readOnly && Boolean(mapControls.chart && mapControls.chart.active);
+                var hasPinnedCharts = charts.some(function(chart) { return chart.pinned !== false; });
+                var showCharts = readOnly ? charts.length > 0 : showChartPanel || hasPinnedCharts;
+                var rightPanelVisible = showEffects || showAnnotations || showCharts;
+                return react.createElement(
+                  'div',
+                  {style: {
+                    position: 'absolute',
+                    display: 'flex',
+                    top: (props.top || 0) + 'px',
+                    right: 0,
+                    zIndex: 1,
+                    maxHeight: '100%',
+                    pointerEvents: 'none'
+                  }},
+                  react.createElement(
+                    'div',
+                    {style: {position: 'relative', pointerEvents: 'all'}},
+                    react.createElement(MapControl, Object.assign({}, props, {top: 0, actionComponents: actionComponents}))
+                  ),
+                  rightPanelVisible
+                    ? react.createElement('div', {
+                        style: {
+                          maxHeight: '100%',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          pointerEvents: 'all',
+                          marginTop: '10px'
+                        }
+                      },
+                      showAnnotations ? react.createElement(AnnotationManager, null) : null,
+                      showCharts ? react.createElement(ChartManager, {
+                        panelActive: showChartPanel,
+                        isExport: readOnly
+                      }) : null,
+                      showEffects ? react.createElement(EffectManager, null) : null
+                      )
+                    : null
+                );
+              };
+
+              return ExportMapControl;
+            }
+            ExportMapControlFactory.deps = [
+              EffectControlFactory,
+              EffectManagerFactory,
+              AnnotationControlFactory,
+              AnnotationManagerFactory,
+              ChartControlFactory,
+              ChartManagerFactory
+            ].concat(MapControlFactory.deps);
+
+            return [MapControlFactory, ExportMapControlFactory];
+          }(React, KeplerGl));
+
+          var CustomPanelHeaderFactory = (function createCustomPanelHeader(react, keplerGl, BrandLogo) {
+            var PanelHeaderFactory = keplerGl.PanelHeaderFactory;
+            if (!PanelHeaderFactory) {
+              console.warn('kepler.gl: Panel header factory not available, skipping branding injection');
+              return null;
+            }
+
+            function ExportPanelHeaderFactory() {
+              var PanelHeader = PanelHeaderFactory.apply(null, arguments);
+              return function ExportPanelHeader(props) {
+                return react.createElement(
+                  PanelHeader,
+                  Object.assign({}, props, {logoComponent: BrandLogo})
+                );
+              };
+            }
+            ExportPanelHeaderFactory.deps = PanelHeaderFactory.deps;
+            return [PanelHeaderFactory, ExportPanelHeaderFactory];
+          }(React, KeplerGl, BrandLogo));
+
+          var CustomFactories = [CustomMapControlFactory, CustomPanelHeaderFactory].filter(Boolean);
+          var KeplerGlComponent = CustomFactories.length
+            ? KeplerGl.injectComponents(CustomFactories)
+            : KeplerGl.KeplerGl;
+
+          var KeplerElement = (function makeKeplerElement(react, keplerGl, mapboxToken, branding, BrandLogo) {
+            return function App() {
+              var rootElm = react.useRef(null);
+              var _useState = react.useState({
+                width: window.innerWidth,
+                height: window.innerHeight
+              });
+              var windowDimension = _useState[0];
+              var setDimension = _useState[1];
+              react.useEffect(function sideEffect(){
+                function handleResize() {
+                  setDimension({width: window.innerWidth, height: window.innerHeight});
+                };
+                window.addEventListener('resize', handleResize);
+                return function() {window.removeEventListener('resize', handleResize);};
+              }, []);
+              // Remove the loading overlay after the first render is painted.
+              // useEffect fires post-commit, so this is safe under React 19's
+              // concurrent renderer — the map is visible before the overlay goes away.
+              react.useEffect(function removeLoadScreen() {
+                var loadScreen = document.getElementById('kepler-load-screen');
+                if (loadScreen) loadScreen.remove();
+              }, []);
+              return react.createElement(
+                'div',
+                {style: {position: 'absolute', left: 0, width: '100vw', height: '100vh'}},
+                react.createElement(BrandLogo, {fixed: true}),
+                react.createElement(KeplerGlComponent, {
+                  mapboxApiAccessToken: mapboxToken,
+                  id: "map",
+                  width: windowDimension.width,
+                  height: windowDimension.height,
+                  appName: branding.appName,
+                  appWebsite: branding.appWebsite
+                })
+              )
+            }
+          }(React, KeplerGl, MAPBOX_TOKEN, branding, BrandLogo));
+
+          const app = (function createReactReduxProvider(react, reactRedux, KeplerElement) {
+            return react.createElement(
+              reactRedux.Provider,
+              {store},
+              react.createElement(KeplerElement, null)
+            )
+          }(React, ReactRedux, KeplerElement));
+          /** END COMPONENTS **/
+
+          /** Render **/
+          (function render(react, reactDOM, app) {
+            const container = document.getElementById('app');
+            const root = reactDOM.createRoot(container);
+            root.render(app);
+          }(React, ReactDOM, app));
+
+          /**
+           * Customize map.
+           * In the following section you can use the store object to dispatch Kepler.gl actions
+           * to add new data and customize behavior
+           */
+          (function customize(keplerGl, store) {
+            const datasets = [{"version":"v1","data":{"id":"-cvi2e7","label":"kepler_flows.csv","color":[143,47,191],"allData":[["NIC","Nicaragua",12.6707,-85.06935,"HN08","Francisco Morazán",14.289,-87.178,1762],["NIC","Nicaragua",12.6707,-85.06935,"HN07","El Paraíso",14.022,-86.48,1602],["USA","United States",39.53848,-97.4826,"HN08","Francisco Morazán",14.289,-87.178,1599],["SLV","El Salvador",13.68537,-88.89012,"HN05","Cortés",15.411,-87.993,1410],["USA","United States",39.53848,-97.4826,"HN05","Cortés",15.411,-87.993,1399],["GTM","Guatemala",14.98213,-90.49713,"HN04","Copán",14.907,-88.9,1038],["GTM","Guatemala",14.98213,-90.49713,"HN05","Cortés",15.411,-87.993,950],["SLV","El Salvador",13.68537,-88.89012,"HN08","Francisco Morazán",14.289,-87.178,934],["NIC","Nicaragua",12.6707,-85.06935,"HN06","Choluteca",13.35,-87.116,826],["NIC","Nicaragua",12.6707,-85.06935,"HN05","Cortés",15.411,-87.993,756],["USA","United States",39.53848,-97.4826,"HN01","Atlántida",15.664,-87.135,704],["SLV","El Salvador",13.68537,-88.89012,"HN13","Lempira",14.41,-88.593,680],["GTM","Guatemala",14.98213,-90.49713,"HN14","Ocotepeque",14.491,-89.042,657],["GTM","Guatemala",14.98213,-90.49713,"HN08","Francisco Morazán",14.289,-87.178,637],["USA","United States",39.53848,-97.4826,"HN18","Yoro",15.306,-87.202,584],["SLV","El Salvador",13.68537,-88.89012,"HN12","La Paz",14.105,-87.881,579],["USA","United States",39.53848,-97.4826,"HN15","Olancho",14.834,-85.927,556],["USA","United States",39.53848,-97.4826,"HN03","Comayagua",14.624,-87.633,490],["MEX","Mexico",23.91999,-102.28945,"HN08","Francisco Morazán",14.289,-87.178,439],["SLV","El Salvador",13.68537,-88.89012,"HN14","Ocotepeque",14.491,-89.042,434],["SLV","El Salvador",13.68537,-88.89012,"HN17","Valle",13.543,-87.59,428],["MEX","Mexico",23.91999,-102.28945,"HN05","Cortés",15.411,-87.993,427],["USA","United States",39.53848,-97.4826,"HN11","Islas de la Bahía",16.341,-86.382,422],["SLV","El Salvador",13.68537,-88.89012,"HN10","Intibucá",14.331,-88.211,413],["SLV","El Salvador",13.68537,-88.89012,"HN03","Comayagua",14.624,-87.633,392],["SLV","El Salvador",13.68537,-88.89012,"HN18","Yoro",15.306,-87.202,370],["USA","United States",39.53848,-97.4826,"HN02","Colón",15.644,-85.608,306],["COL","Colombia",3.37311,-73.17435,"HN08","Francisco Morazán",14.289,-87.178,306],["USA","United States",39.53848,-97.4826,"HN04","Copán",14.907,-88.9,298],["GTM","Guatemala",14.98213,-90.49713,"HN16","Santa Bárbara",15.098,-88.351,277],["NIC","Nicaragua",12.6707,-85.06935,"HN09","Gracias a Dios",15.231,-84.345,274],["CHN","China",32.49818,106.33729,"HN08","Francisco Morazán",14.289,-87.178,272],["CRI","Costa Rica",10.0651,-84.07792,"HN08","Francisco Morazán",14.289,-87.178,271],["ESP","Spain",40.09095,-3.46472,"HN08","Francisco Morazán",14.289,-87.178,260],["SLV","El Salvador",13.68537,-88.89012,"HN01","Atlántida",15.664,-87.135,257],["NIC","Nicaragua",12.6707,-85.06935,"HN15","Olancho",14.834,-85.927,224],["USA","United States",39.53848,-97.4826,"HN10","Intibucá",14.331,-88.211,211],["USA","United States",39.53848,-97.4826,"HN16","Santa Bárbara",15.098,-88.351,209],["GTM","Guatemala",14.98213,-90.49713,"HN01","Atlántida",15.664,-87.135,207],["COL","Colombia",3.37311,-73.17435,"HN05","Cortés",15.411,-87.993,197],["SLV","El Salvador",13.68537,-88.89012,"HN15","Olancho",14.834,-85.927,193],["SLV","El Salvador",13.68537,-88.89012,"HN06","Choluteca",13.35,-87.116,179],["SLV","El Salvador",13.68537,-88.89012,"HN04","Copán",14.907,-88.9,179],["NIC","Nicaragua",12.6707,-85.06935,"HN01","Atlántida",15.664,-87.135,171],["CRI","Costa Rica",10.0651,-84.07792,"HN05","Cortés",15.411,-87.993,167],["USA","United States",39.53848,-97.4826,"HN06","Choluteca",13.35,-87.116,155],["SLV","El Salvador",13.68537,-88.89012,"HN16","Santa Bárbara",15.098,-88.351,155],["CUB","Cuba",21.33402,-77.97585,"HN08","Francisco Morazán",14.289,-87.178,150],["GTM","Guatemala",14.98213,-90.49713,"HN18","Yoro",15.306,-87.202,145],["GTM","Guatemala",14.98213,-90.49713,"HN03","Comayagua",14.624,-87.633,141],["NIC","Nicaragua",12.6707,-85.06935,"HN03","Comayagua",14.624,-87.633,133],["USA","United States",39.53848,-97.4826,"HN07","El Paraíso",14.022,-86.48,130],["CHL","Chile",-38.15177,-72.31887,"HN08","Francisco Morazán",14.289,-87.178,116],["DEU","Germany",50.96173,9.67835,"HN08","Francisco Morazán",14.289,-87.178,110],["NIC","Nicaragua",12.6707,-85.06935,"HN17","Valle",13.543,-87.59,110],["USA","United States",39.53848,-97.4826,"HN17","Valle",13.543,-87.59,110],["SLV","El Salvador",13.68537,-88.89012,"HN02","Colón",15.644,-85.608,109],["MEX","Mexico",23.91999,-102.28945,"HN01","Atlántida",15.664,-87.135,109],["USA","United States",39.53848,-97.4826,"HN13","Lempira",14.41,-88.593,101],["NIC","Nicaragua",12.6707,-85.06935,"HN18","Yoro",15.306,-87.202,95],["USA","United States",39.53848,-97.4826,"HN12","La Paz",14.105,-87.881,93],["PER","Peru",-12.97668,-72.90016,"HN08","Francisco Morazán",14.289,-87.178,92],["ESP","Spain",40.09095,-3.46472,"HN05","Cortés",15.411,-87.993,91],["CUB","Cuba",21.33402,-77.97585,"HN05","Cortés",15.411,-87.993,90],["BRA","Brazil",-12.09869,-49.55945,"HN08","Francisco Morazán",14.289,-87.178,89],["NIC","Nicaragua",12.6707,-85.06935,"HN11","Islas de la Bahía",16.341,-86.382,86],["PAN","Panama",8.72198,-80.35211,"HN08","Francisco Morazán",14.289,-87.178,82],["ITA","Italy",44.73248,11.07691,"HN08","Francisco Morazán",14.289,-87.178,81],["ARG","Argentina",-33.50116,-64.17333,"HN08","Francisco Morazán",14.289,-87.178,80],["CAN","Canada",60.32429,-101.9107,"HN08","Francisco Morazán",14.289,-87.178,79],["MEX","Mexico",23.91999,-102.28945,"HN18","Yoro",15.306,-87.202,79],["SLV","El Salvador",13.68537,-88.89012,"HN07","El Paraíso",14.022,-86.48,77],["GTM","Guatemala",14.98213,-90.49713,"HN02","Colón",15.644,-85.608,77],["USA","United States",39.53848,-97.4826,"HN14","Ocotepeque",14.491,-89.042,74],["BLZ","Belize",17.20207,-88.71296,"HN05","Cortés",15.411,-87.993,73],["PER","Peru",-12.97668,-72.90016,"HN05","Cortés",15.411,-87.993,71],["MEX","Mexico",23.91999,-102.28945,"HN04","Copán",14.907,-88.9,59],["GTM","Guatemala",14.98213,-90.49713,"HN06","Choluteca",13.35,-87.116,57],["GTM","Guatemala",14.98213,-90.49713,"HN15","Olancho",14.834,-85.927,56],["DOM","Dominican Republic",19.10414,-70.654,"HN05","Cortés",15.411,-87.993,55],["MEX","Mexico",23.91999,-102.28945,"HN16","Santa Bárbara",15.098,-88.351,53],["COL","Colombia",3.37311,-73.17435,"HN01","Atlántida",15.664,-87.135,53],["MEX","Mexico",23.91999,-102.28945,"HN03","Comayagua",14.624,-87.633,53],["CHL","Chile",-38.15177,-72.31887,"HN05","Cortés",15.411,-87.993,52],["ITA","Italy",44.73248,11.07691,"HN05","Cortés",15.411,-87.993,52],["CAN","Canada",60.32429,-101.9107,"HN05","Cortés",15.411,-87.993,51],["MEX","Mexico",23.91999,-102.28945,"HN15","Olancho",14.834,-85.927,51],["FRA","France",46.69611,2.55227,"HN08","Francisco Morazán",14.289,-87.178,49],["PAN","Panama",8.72198,-80.35211,"HN05","Cortés",15.411,-87.993,49],["JPN","Japan",36.14254,138.44217,"HN08","Francisco Morazán",14.289,-87.178,46],["GTM","Guatemala",14.98213,-90.49713,"HN11","Islas de la Bahía",16.341,-86.382,45],["BLZ","Belize",17.20207,-88.71296,"HN01","Atlántida",15.664,-87.135,44],["NIC","Nicaragua",12.6707,-85.06935,"HN16","Santa Bárbara",15.098,-88.351,44],["DEU","Germany",50.96173,9.67835,"HN05","Cortés",15.411,-87.993,44],["BLZ","Belize",17.20207,-88.71296,"HN18","Yoro",15.306,-87.202,43],["USA","United States",39.53848,-97.4826,"HN09","Gracias a Dios",15.231,-84.345,42],["GTM","Guatemala",14.98213,-90.49713,"HN13","Lempira",14.41,-88.593,41],["MEX","Mexico",23.91999,-102.28945,"HN02","Colón",15.644,-85.608,41],["CUB","Cuba",21.33402,-77.97585,"HN01","Atlántida",15.664,-87.135,41],["KOR","South Korea",36.38492,128.1295,"HN05","Cortés",15.411,-87.993,41],["NIC","Nicaragua",12.6707,-85.06935,"HN02","Colón",15.644,-85.608,40],["CAN","Canada",60.32429,-101.9107,"HN11","Islas de la Bahía",16.341,-86.382,40],["NIC","Nicaragua",12.6707,-85.06935,"HN04","Copán",14.907,-88.9,40],["ESP","Spain",40.09095,-3.46472,"HN01","Atlántida",15.664,-87.135,39],["GTM","Guatemala",14.98213,-90.49713,"HN07","El Paraíso",14.022,-86.48,39],["VEN","Venezuela",7.18248,-64.59938,"HN08","Francisco Morazán",14.289,-87.178,36],["PSE","Palestinian Territories",32.04743,35.29134,"HN05","Cortés",15.411,-87.993,35],["BRA","Brazil",-12.09869,-49.55945,"HN05","Cortés",15.411,-87.993,35],["CAN","Canada",60.32429,-101.9107,"HN01","Atlántida",15.664,-87.135,34],["SLV","El Salvador",13.68537,-88.89012,"HN11","Islas de la Bahía",16.341,-86.382,34],["CHN","China",32.49818,106.33729,"HN05","Cortés",15.411,-87.993,33],["ECU","Ecuador",-1.25908,-78.18837,"HN08","Francisco Morazán",14.289,-87.178,33],["URY","Uruguay",-32.96113,-55.96694,"HN08","Francisco Morazán",14.289,-87.178,32],["TWN","Taiwan",23.65241,120.8682,"HN08","Francisco Morazán",14.289,-87.178,31],["GTM","Guatemala",14.98213,-90.49713,"HN12","La Paz",14.105,-87.881,30],["PRK","North Korea",39.88525,126.44452,"HN05","Cortés",15.411,-87.993,30],["MEX","Mexico",23.91999,-102.28945,"HN07","El Paraíso",14.022,-86.48,30],["DEU","Germany",50.96173,9.67835,"HN11","Islas de la Bahía",16.341,-86.382,29],["BLZ","Belize",17.20207,-88.71296,"HN08","Francisco Morazán",14.289,-87.178,28],["BLZ","Belize",17.20207,-88.71296,"HN11","Islas de la Bahía",16.341,-86.382,28],["PER","Peru",-12.97668,-72.90016,"HN01","Atlántida",15.664,-87.135,28],["ARG","Argentina",-33.50116,-64.17333,"HN05","Cortés",15.411,-87.993,27],["DEU","Germany",50.96173,9.67835,"HN01","Atlántida",15.664,-87.135,27],["PSE","Palestinian Territories",32.04743,35.29134,"HN08","Francisco Morazán",14.289,-87.178,27],["GTM","Guatemala",14.98213,-90.49713,"HN17","Valle",13.543,-87.59,27],["BOL","Bolivia",-16.66602,-64.59343,"HN08","Francisco Morazán",14.289,-87.178,26],["GBR","United Kingdom",54.40274,-2.11635,"HN11","Islas de la Bahía",16.341,-86.382,26],["PRI","Puerto Rico",18.23467,-66.48107,"HN08","Francisco Morazán",14.289,-87.178,26],["DOM","Dominican Republic",19.10414,-70.654,"HN08","Francisco Morazán",14.289,-87.178,26],["GTM","Guatemala",14.98213,-90.49713,"HN10","Intibucá",14.331,-88.211,26],["CYM","Cayman Islands",19.31986,-81.24055,"HN01","Atlántida",15.664,-87.135,25],["NIC","Nicaragua",12.6707,-85.06935,"HN12","La Paz",14.105,-87.881,25],["CHE","Switzerland",46.71911,7.46396,"HN08","Francisco Morazán",14.289,-87.178,25],["NLD","Netherlands",52.42221,5.61144,"HN08","Francisco Morazán",14.289,-87.178,24],["ECU","Ecuador",-1.25908,-78.18837,"HN05","Cortés",15.411,-87.993,23],["ESP","Spain",40.09095,-3.46472,"HN16","Santa Bárbara",15.098,-88.351,23],["CUB","Cuba",21.33402,-77.97585,"HN15","Olancho",14.834,-85.927,23],["ESP","Spain",40.09095,-3.46472,"HN03","Comayagua",14.624,-87.633,23],["CUB","Cuba",21.33402,-77.97585,"HN07","El Paraíso",14.022,-86.48,23],["ITA","Italy",44.73248,11.07691,"HN11","Islas de la Bahía",16.341,-86.382,22],["COL","Colombia",3.37311,-73.17435,"HN03","Comayagua",14.624,-87.633,22],["MEX","Mexico",23.91999,-102.28945,"HN06","Choluteca",13.35,-87.116,22],["NIC","Nicaragua",12.6707,-85.06935,"HN10","Intibucá",14.331,-88.211,22],["CRI","Costa Rica",10.0651,-84.07792,"HN01","Atlántida",15.664,-87.135,21],["CRI","Costa Rica",10.0651,-84.07792,"HN07","El Paraíso",14.022,-86.48,21],["BRA","Brazil",-12.09869,-49.55945,"HN01","Atlántida",15.664,-87.135,21],["FRA","France",46.69611,2.55227,"HN01","Atlántida",15.664,-87.135,20],["ESP","Spain",40.09095,-3.46472,"HN18","Yoro",15.306,-87.202,20],["ESP","Spain",40.09095,-3.46472,"HN07","El Paraíso",14.022,-86.48,19],["CUB","Cuba",21.33402,-77.97585,"HN18","Yoro",15.306,-87.202,19],["ECU","Ecuador",-1.25908,-78.18837,"HN06","Choluteca",13.35,-87.116,18],["GBR","United Kingdom",54.40274,-2.11635,"HN08","Francisco Morazán",14.289,-87.178,18],["NLD","Netherlands",52.42221,5.61144,"HN05","Cortés",15.411,-87.993,18],["MEX","Mexico",23.91999,-102.28945,"HN11","Islas de la Bahía",16.341,-86.382,18],["BLZ","Belize",17.20207,-88.71296,"HN14","Ocotepeque",14.491,-89.042,18],["PAN","Panama",8.72198,-80.35211,"HN01","Atlántida",15.664,-87.135,17],["JAM","Jamaica",18.13712,-77.31877,"HN09","Gracias a Dios",15.231,-84.345,17],["ISR","Israel",30.91115,34.84792,"HN05","Cortés",15.411,-87.993,17],["PRI","Puerto Rico",18.23467,-66.48107,"HN05","Cortés",15.411,-87.993,17],["GBR","United Kingdom",54.40274,-2.11635,"HN05","Cortés",15.411,-87.993,16],["VEN","Venezuela",7.18248,-64.59938,"HN05","Cortés",15.411,-87.993,16],["BOL","Bolivia",-16.66602,-64.59343,"HN05","Cortés",15.411,-87.993,16],["MEX","Mexico",23.91999,-102.28945,"HN14","Ocotepeque",14.491,-89.042,16],["BLZ","Belize",17.20207,-88.71296,"HN03","Comayagua",14.624,-87.633,15],["PAN","Panama",8.72198,-80.35211,"HN11","Islas de la Bahía",16.341,-86.382,15],["CUB","Cuba",21.33402,-77.97585,"HN11","Islas de la Bahía",16.341,-86.382,15],["MEX","Mexico",23.91999,-102.28945,"HN17","Valle",13.543,-87.59,15],["ESP","Spain",40.09095,-3.46472,"HN15","Olancho",14.834,-85.927,14],["BLZ","Belize",17.20207,-88.71296,"HN16","Santa Bárbara",15.098,-88.351,14],["MEX","Mexico",23.91999,-102.28945,"HN12","La Paz",14.105,-87.881,14],["PRI","Puerto Rico",18.23467,-66.48107,"HN01","Atlántida",15.664,-87.135,14],["CAN","Canada",60.32429,-101.9107,"HN07","El Paraíso",14.022,-86.48,14],["JPN","Japan",36.14254,138.44217,"HN05","Cortés",15.411,-87.993,14],["CYM","Cayman Islands",19.31986,-81.24055,"HN11","Islas de la Bahía",16.341,-86.382,14],["ISR","Israel",30.91115,34.84792,"HN08","Francisco Morazán",14.289,-87.178,14],["HTI","Haiti",19.26378,-72.22405,"HN05","Cortés",15.411,-87.993,14],["BLZ","Belize",17.20207,-88.71296,"HN02","Colón",15.644,-85.608,13],["ITA","Italy",44.73248,11.07691,"HN01","Atlántida",15.664,-87.135,13],["CUB","Cuba",21.33402,-77.97585,"HN16","Santa Bárbara",15.098,-88.351,13],["PSE","Palestinian Territories",32.04743,35.29134,"HN07","El Paraíso",14.022,-86.48,13],["PAN","Panama",8.72198,-80.35211,"HN03","Comayagua",14.624,-87.633,12],["ARG","Argentina",-33.50116,-64.17333,"HN03","Comayagua",14.624,-87.633,12],["CHL","Chile",-38.15177,-72.31887,"HN01","Atlántida",15.664,-87.135,12],["CHN","China",32.49818,106.33729,"HN03","Comayagua",14.624,-87.633,12],["CRI","Costa Rica",10.0651,-84.07792,"HN06","Choluteca",13.35,-87.116,12],["ARG","Argentina",-33.50116,-64.17333,"HN11","Islas de la Bahía",16.341,-86.382,12],["URY","Uruguay",-32.96113,-55.96694,"HN05","Cortés",15.411,-87.993,12],["MEX","Mexico",23.91999,-102.28945,"HN13","Lempira",14.41,-88.593,11],["BLZ","Belize",17.20207,-88.71296,"HN04","Copán",14.907,-88.9,11],["CRI","Costa Rica",10.0651,-84.07792,"HN03","Comayagua",14.624,-87.633,11],["SWE","Sweden",65.85918,19.01705,"HN08","Francisco Morazán",14.289,-87.178,11],["NLD","Netherlands",52.42221,5.61144,"HN01","Atlántida",15.664,-87.135,10],["PRY","Paraguay",-21.67451,-60.14639,"HN08","Francisco Morazán",14.289,-87.178,10],["ESP","Spain",40.09095,-3.46472,"HN06","Choluteca",13.35,-87.116,10],["CHE","Switzerland",46.71911,7.46396,"HN05","Cortés",15.411,-87.993,10],["SLV","El Salvador",13.68537,-88.89012,"HN09","Gracias a Dios",15.231,-84.345,10],["CAN","Canada",60.32429,-101.9107,"HN10","Intibucá",14.331,-88.211,10],["BRA","Brazil",-12.09869,-49.55945,"HN15","Olancho",14.834,-85.927,10],["CRI","Costa Rica",10.0651,-84.07792,"HN15","Olancho",14.834,-85.927,10]],"fields":[{"name":"origin","type":"string","format":"","analyzerType":"STRING"},{"name":"origin_name","type":"string","format":"","analyzerType":"STRING"},{"name":"origin_lat","type":"real","format":"","analyzerType":"FLOAT"},{"name":"origin_lon","type":"real","format":"","analyzerType":"FLOAT"},{"name":"dest","type":"string","format":"","analyzerType":"STRING"},{"name":"dest_name","type":"string","format":"","analyzerType":"STRING"},{"name":"dest_lat","type":"real","format":"","analyzerType":"FLOAT"},{"name":"dest_lon","type":"real","format":"","analyzerType":"FLOAT"},{"name":"count","type":"integer","format":"","analyzerType":"INT"}],"type":"","metadata":{"id":"-cvi2e7","format":"row","label":"kepler_flows.csv","size":13622},"disableDataOperation":false}}];
+            const config = {"version":"v1","config":{"visState":{"filters":[],"layers":[{"id":"77pgidd","type":"arc","config":{"dataId":"-cvi2e7","columnMode":"points","label":"Living here, born elsewhere","color":[146,38,198],"highlightColor":[252,242,26,255],"columns":{"lat0":"origin_lat","lng0":"origin_lon","lat1":"dest_lat","lng1":"dest_lon"},"isVisible":false,"visConfig":{"opacity":0.8,"thickness":0.99,"colorRange":{"colors":["#223F9A","#892B8D","#C00B68","#EA4242","#FF9219","#FAE300"],"name":"UberPool","type":"diverging","category":"Uber"},"sizeRange":[0,10],"targetColor":null,"targetArrowEnabled":true,"targetArrowShape":"triangle","targetArrowSize":4},"hidden":false,"textLabel":[{"field":null,"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":{"name":"origin_name","type":"string"},"colorScale":"ordinal","sizeField":null,"sizeScale":"linear"}},{"id":"tniiwyj","type":"point","config":{"dataId":"-cvi2e7","columnMode":"points","label":"origin","color":[241,92,23],"highlightColor":[252,242,26,255],"columns":{"lat":"origin_lat","lng":"origin_lon"},"isVisible":true,"visConfig":{"pulseTrigger":"continuous","pulseTimeField":"","pulseDurationMs":1000,"glowEnabled":true,"glowExtent":1.5,"glowStrength":0.15,"pulseEnabled":true,"pulseMode":"pulse","pulseSpeed":0.4,"pulseExpansion":5.03,"radius":8,"fixedRadius":false,"opacity":0.8,"outline":true,"thickness":2,"strokeColor":null,"colorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"strokeColorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"radiusRange":[0,50],"filled":true,"billboard":false,"allowHover":true,"showNeighborOnHover":true,"showHighlightColor":true},"hidden":false,"textLabel":[{"field":{"name":"origin","type":"string"},"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":{"name":"origin","type":"string"},"colorScale":"ordinal","strokeColorField":{"name":"origin","type":"string"},"strokeColorScale":"ordinal","sizeField":null,"sizeScale":"linear"}},{"id":"fdp5rmt","type":"point","config":{"dataId":"-cvi2e7","columnMode":"points","label":"dest","color":[34,63,154],"highlightColor":[252,242,26,255],"columns":{"lat":"dest_lat","lng":"dest_lon"},"isVisible":true,"visConfig":{"pulseTrigger":"continuous","pulseTimeField":"","pulseDurationMs":1000,"glowEnabled":true,"glowExtent":2,"glowStrength":0.2,"pulseEnabled":false,"pulseMode":"pulse","pulseSpeed":1,"pulseExpansion":2,"radius":5,"fixedRadius":false,"opacity":0.8,"outline":false,"thickness":2,"strokeColor":null,"colorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"strokeColorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"radiusRange":[0,50],"filled":true,"billboard":false,"allowHover":true,"showNeighborOnHover":false,"showHighlightColor":true},"hidden":false,"textLabel":[]},"visualChannels":{"colorField":{"name":"count","type":"integer"},"colorScale":"quantile","strokeColorField":null,"strokeColorScale":"quantile","sizeField":null,"sizeScale":"linear"}},{"id":"bdqzc4a","type":"arc","config":{"dataId":"-cvi2e7","columnMode":"points","label":"origin -> dest arc","color":[146,38,198],"highlightColor":[252,242,26,255],"columns":{"lat0":"origin_lat","lng0":"origin_lon","lat1":"dest_lat","lng1":"dest_lon"},"isVisible":true,"visConfig":{"opacity":0.8,"thickness":0.6,"colorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"sizeRange":[0,10],"targetColor":null,"targetArrowEnabled":true,"targetArrowShape":"chevron","targetArrowSize":12},"hidden":false,"textLabel":[{"field":null,"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":{"name":"origin","type":"string"},"colorScale":"ordinal","sizeField":null,"sizeScale":"linear"}},{"id":"5iolvvn","type":"arc","config":{"dataId":"-cvi2e7","columnMode":"points","label":"origin -> dest line","color":[218,112,191],"highlightColor":[252,242,26,255],"columns":{"lat0":"origin_lat","lng0":"origin_lon","lat1":"dest_lat","lng1":"dest_lon"},"isVisible":true,"visConfig":{"opacity":0.8,"thickness":0.45,"colorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"sizeRange":[0,10],"targetColor":null,"targetArrowEnabled":true,"targetArrowShape":"triangle","targetArrowSize":8},"hidden":false,"textLabel":[{"field":null,"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":{"name":"origin","type":"string"},"colorScale":"ordinal","sizeField":null,"sizeScale":"linear"}}],"effects":[],"charts":[{"id":"3cpzp1","title":"Time series","type":"layerChart","dataId":"-cvi2e7","applyFilters":true,"pinned":false,"display":{"isConfigActive":false,"isJsonEditorActive":false},"xAxis":{"field":null,"aggregation":"timeBin","title":null},"yAxis":{"field":null,"aggregation":"sum","title":null},"axis":{"field":{"name":"origin","type":"string"},"aggregation":"uniqueBin","title":"origin"},"chartDisplay":{"idField":null,"numEntries":5},"layerId":"tniiwyj","layerChartType":"TIME_SERIES"}],"annotations":[],"interactionConfig":{"tooltip":{"fieldsToShow":{"-cvi2e7":[{"name":"origin","format":null},{"name":"origin_name","format":null},{"name":"dest","format":null},{"name":"dest_name","format":null},{"name":"count","format":null}]},"timezone":null,"compareMode":false,"compareType":"absolute","enabled":true},"legend":{"hideInvisibleLayers":false,"enabled":false},"brush":{"size":2.5,"enabled":false},"geocoder":{"limitSearch":false,"color":[255,0,0],"enabled":false},"coordinate":{"enabled":false},"annotation":{"enabled":false},"zoomOpacity":{"controllers":[],"enabled":false}},"layerBlending":"normal","overlayBlending":"screen","splitMaps":[],"animationConfig":{"currentTime":null,"speed":1,"timeFormat":null,"timezone":null},"editor":{"features":[],"visible":true},"layerOrder":["77pgidd","tniiwyj","fdp5rmt","bdqzc4a","5iolvvn"],"groupBys":[],"joins":[]},"mapState":{"bearing":24,"dragRotate":true,"latitude":14.72531082557459,"longitude":-88.99561723704207,"pitch":50,"zoom":1.9518198590673357,"isSplit":false,"isViewportSynced":true,"isZoomLocked":false,"splitMapViewports":[],"maxPitch":60,"mapSplitMode":"SINGLE_MAP","swipeComparePercentage":50,"mapViewMode":"MODE_GLOBE","globe":{"enabled":true,"config":{"atmosphere":true,"hugeHalo":true,"hugeHaloRadius":3.5,"hugeHaloOpacity":0.2,"azimuth":false,"azimuthAngle":45,"terminator":true,"terminatorOpacity":0.35,"basemap":true,"labels":false,"labelsColor":[114.75,114.75,114.75],"adminLines":true,"adminLinesColor":[40,63,93],"water":true,"waterColor":[44,53,60],"surface":true,"surfaceColor":[14,14,14],"backgroundColor":[4,9,17],"stars":true}}},"mapStyle":{"styleType":"dark-matter","topLayerGroups":{},"visibleLayerGroups":{"label":true,"road":true,"border":false,"building":true,"water":true,"land":true,"3d building":false},"threeDBuildingColor":[15.035172933000911,15.035172933000911,15.035172933000911],"backgroundColor":[0,0,0],"mapStyles":{}},"uiState":{"mapControls":{"mapLegend":{"active":false,"settings":{"position":{"x":10,"anchorX":"right","y":96.90625,"anchorY":"top"}}},"chart":{"active":false},"cameraBookmarks":{"show":false,"settings":{"position":{"x":60,"y":20,"anchorX":"right","anchorY":"top"},"contentHeight":-1}},"mapInfo":{"active":true,"show":true}},"locale":"en","theme":"dark"}}};
+            const info = null;
+
+            const loadedData = keplerGl.KeplerGlSchema.load(
+              datasets,
+              config
+            );
+
+            // The 500 ms delay is a historical workaround for a race where
+            // keplerGl re-initialises and overwrites config applied synchronously.
+            // The pre-seeded styleType above removes the basemap flash on first
+            // render; this dispatch still applies the full saved config (layers,
+            // viewport, layer groups, etc.) once the component has settled.
+            window.setTimeout(() => {
+              store.dispatch(
+                keplerGl.addDataToMap({
+                  datasets: loadedData.datasets,
+                  config: loadedData.config,
+                  info,
+                  options: {
+                    centerMap: false,
+                  },
+                })
+              );
+            }, 500);
+          }(KeplerGl, store))
+        </script>
+      </body>
+    </html>
+  
